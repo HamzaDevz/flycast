@@ -31,6 +31,9 @@ android {
                 arguments += "-DSENTRY_UPLOAD_URL=" + (System.getenv("SENTRY_UPLOAD_URL") ?: "")
                 arguments += "-DUSE_OPENMP=OFF"
                 arguments += "-DANDROID_WEAK_API_DEFS=ON"
+                // Built on a Mac, breakpad's autotools take its ranlib (no aarch64-linux-android-ranlib): an archive lld
+                // rejects. Only crash dumps, uploaded nowhere without SENTRY_UPLOAD_URL
+                arguments += "-DUSE_BREAKPAD=OFF"
             }
         }
 
