@@ -68,7 +68,7 @@ android {
     externalNativeBuild {
         cmake {
             path = file("../../../CMakeLists.txt")
-            version = "3.31.6"
+            version = "3.22.1"
         }
     }
     packaging {
