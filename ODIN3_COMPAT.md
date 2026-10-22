@@ -21,3 +21,4 @@ Labo commun `odin3-lab` (VM ARM64 pages 4 Ko + profil Vulkan de l'Adreno 830) po
 
 | Jeu | Statut | Vu jusqu'à | Mesure | Notes | Testé le | Build |
 |---|---|---|---|---|---|---|
+| Power Stone (Europe) | 🔵 Jouable | Combat arcade (Falcon contre Wang-Tang, 30 s), démo d'attraction, menus | Vitesse 100 % (chrono du combat : 10,00 s de jeu par 10 s), 46-49 images/s affichées pour 50 (jeu PAL, écran 120 Hz), 12/s au chargement de la démo | Vulkan, rendu 1920 lignes, rendu threadé, réglages copiés de l'app officielle ; ~3 images/s jamais affichées (cause à chercher) ; banc odin3-lab validé (même démo et mêmes menus VM/Odin) | 2026-10-22 | a4c34163 |
