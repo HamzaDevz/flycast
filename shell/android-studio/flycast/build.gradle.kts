@@ -56,7 +56,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("release")
+            // Odin 3 build: its own package, installed alongside the official app (debug key without the Play keystore)
+            applicationIdSuffix = ".odin3"
+            signingConfig = signingConfigs.getByName(if (System.getenv("ANDROID_KEYSTORE_PASSWORD") != null) "release" else "debug")
         }
     }
     compileOptions {
