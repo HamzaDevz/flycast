@@ -151,6 +151,14 @@ extern "C" JNIEXPORT void JNICALL Java_com_flycast_emulator_periph_InputDeviceMa
 	}
 }
 
+extern "C" JNIEXPORT void JNICALL Java_com_flycast_emulator_periph_InputDeviceManager_joystickSetPort(JNIEnv *env, jobject obj,
+		jint id, jint port)
+{
+	std::shared_ptr<AndroidGamepadDevice> device = AndroidGamepadDevice::GetAndroidGamepad(id);
+	if (device)
+		device->set_maple_port(port);
+}
+
 extern "C" JNIEXPORT void JNICALL Java_com_flycast_emulator_periph_InputDeviceManager_virtualReleaseAll(JNIEnv *env, jobject obj) {
 	if (virtualGamepad)
 		virtualGamepad->releaseAll();

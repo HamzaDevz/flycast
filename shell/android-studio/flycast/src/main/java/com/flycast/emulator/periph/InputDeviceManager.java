@@ -1,15 +1,19 @@
 package com.flycast.emulator.periph;
 
 import android.content.Context;
+import android.hardware.display.DisplayManager;
 import android.hardware.input.InputManager;
 import android.os.Build;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
+import android.util.Log;
 import android.view.InputDevice;
+import android.view.KeyEvent;
 
 import com.flycast.emulator.Emulator;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -24,7 +28,35 @@ public final class InputDeviceManager implements InputManager.InputDeviceListene
     static { System.loadLibrary("flycast"); }
     private static final InputDeviceManager INSTANCE = new InputDeviceManager();
     private InputManager inputManager;
-    private int maple_port = 0;
+    private DisplayManager displayManager;
+
+    private static final int PORT_COUNT = 4;
+    // The handheld's own pad, which gives port A up to any pad that joins
+    private static final String BUILT_IN_CONTROLLER_NAME = "Odin Controller";
+    // Android id of the pad playing on each maple port, 0 if none
+    private final int[] portHolders = new int[PORT_COUNT];
+    private final Set<Integer> pads = new HashSet<>();
+
+    // Leaving the dock hands port A back to the handheld's own pad, as on a Switch
+    private final DisplayManager.DisplayListener displayListener = new DisplayManager.DisplayListener() {
+        @Override
+        public void onDisplayAdded(int displayId) {
+        }
+
+        @Override
+        public void onDisplayRemoved(int displayId) {
+            if (displayManager != null
+                    && displayManager.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION).length == 0) {
+                int builtIn = findBuiltIn();
+                if (builtIn != 0 && createDevice(builtIn) && portHolders[0] != builtIn)
+                    assignPort(0, builtIn);
+            }
+        }
+
+        @Override
+        public void onDisplayChanged(int displayId) {
+        }
+    };
 
     private boolean hasTouchscreen = false;
 
@@ -44,13 +76,16 @@ public final class InputDeviceManager implements InputManager.InputDeviceListene
     public void startListening(Context applicationContext)
     {
         knownDevices.clear();
-        maple_port = 0;
+        pads.clear();
+        Arrays.fill(portHolders, 0);
         hasTouchscreen = applicationContext.getPackageManager().hasSystemFeature("android.hardware.touchscreen");
         if (hasTouchscreen)
             joystickAdded(VIRTUAL_GAMEPAD_ID, null, 0, null,
                     null, null, getVibrator(VIRTUAL_GAMEPAD_ID) != null);
         inputManager = (InputManager)applicationContext.getSystemService(Context.INPUT_SERVICE);
         inputManager.registerInputDeviceListener(this, null);
+        displayManager = (DisplayManager)applicationContext.getSystemService(Context.DISPLAY_SERVICE);
+        displayManager.registerDisplayListener(displayListener, null);
     }
 
     public void stopListening()
@@ -58,6 +93,10 @@ public final class InputDeviceManager implements InputManager.InputDeviceListene
         if (inputManager != null) {
             inputManager.unregisterInputDeviceListener(this);
             inputManager = null;
+        }
+        if (displayManager != null) {
+            displayManager.unregisterDisplayListener(displayListener);
+            displayManager = null;
         }
         joystickRemoved(VIRTUAL_GAMEPAD_ID);
     }
@@ -68,10 +107,20 @@ public final class InputDeviceManager implements InputManager.InputDeviceListene
 
     @Override
     public void onInputDeviceRemoved(int i) {
-        if (maple_port > 0)
-            maple_port--;
         joystickRemoved(i);
         knownDevices.remove(i);
+        pads.remove(i);
+        for (int port = 0; port < PORT_COUNT; port++)
+            if (portHolders[port] == i)
+                portHolders[port] = 0;
+        // The handheld's own pad takes port A back when its pad went away
+        if (portHolders[0] == 0) {
+            for (int id : pads)
+                if (isBuiltIn(id)) {
+                    assignPort(0, id);
+                    break;
+                }
+        }
     }
 
     @Override
@@ -201,10 +250,9 @@ public final class InputDeviceManager implements InputManager.InputDeviceListene
         InputDevice device = InputDevice.getDevice(id);
         if (device == null || (device.getSources() & InputDevice.SOURCE_CLASS_BUTTON) != InputDevice.SOURCE_CLASS_BUTTON)
             return false;
-        int port = 0;
-        if ((device.getSources() & InputDevice.SOURCE_CLASS_JOYSTICK) == InputDevice.SOURCE_CLASS_JOYSTICK) {
-            port = this.maple_port == 3 ? 3 : this.maple_port++;
-        }
+        // Pads play on no port until they join with a button press
+        boolean pad = (device.getSources() & InputDevice.SOURCE_CLASS_JOYSTICK) == InputDevice.SOURCE_CLASS_JOYSTICK;
+        int port = pad ? -1 : 0;
         List<InputDevice.MotionRange> axes = device.getMotionRanges();
         List<Integer> fullAxes = new ArrayList<>();
         List<Integer> halfAxes = new ArrayList<>();
@@ -221,12 +269,85 @@ public final class InputDeviceManager implements InputManager.InputDeviceListene
                 ArrayUtils.toPrimitive(fullAxes.toArray(new Integer[0])), ArrayUtils.toPrimitive(halfAxes.toArray(new Integer[0])),
                 getVibrator(id) != null);
         knownDevices.add(id);
+        if (pad) {
+            pads.add(id);
+            // Ports saved in emu.cfg are left aside: the pads join on their own
+            joystickSetPort(id, port);
+        }
         return true;
     }
+
+    private static boolean isBuiltIn(int id) {
+        InputDevice device = InputDevice.getDevice(id);
+        return device != null && BUILT_IN_CONTROLLER_NAME.equals(device.getName());
+    }
+
+    private static int findBuiltIn() {
+        for (int id : InputDevice.getDeviceIds())
+            if (isBuiltIn(id))
+                return id;
+        return 0;
+    }
+
+    private int portOf(int id) {
+        for (int port = 0; port < PORT_COUNT; port++)
+            if (portHolders[port] == id)
+                return port;
+        return -1;
+    }
+
+    /**
+     * Like a Switch, a pad that plays on no port joins on a button press: on port A if the
+     * handheld's own pad or no pad holds it, else on the first free port. The handheld's own
+     * pad takes port A back when no one else plays.
+     */
+    private void claimPort(int id) {
+        if (!pads.contains(id) || portOf(id) >= 0)
+            return;
+        boolean builtIn = isBuiltIn(id);
+        boolean othersFree = true;
+        for (int port = 1; port < PORT_COUNT; port++)
+            othersFree &= portHolders[port] == 0;
+        int port = -1;
+        if (builtIn && othersFree)
+            port = 0;
+        else {
+            for (int p = 0; p < PORT_COUNT; p++) {
+                int holder = portHolders[p];
+                if (holder == 0 || (!builtIn && isBuiltIn(holder))) {
+                    port = p;
+                    break;
+                }
+            }
+        }
+        if (port >= 0)
+            assignPort(port, id);
+    }
+
+    private void assignPort(int port, int id) {
+        int previous = portOf(id);
+        if (previous >= 0)
+            portHolders[previous] = 0;
+        int holder = portHolders[port];
+        if (holder != 0 && holder != id)
+            joystickSetPort(holder, -1);
+        portHolders[port] = id;
+        joystickSetPort(id, port);
+        InputDevice device = InputDevice.getDevice(id);
+        Log.i("flycast", (device != null ? device.getName() : String.valueOf(id)) + " plays as player " + (port + 1));
+    }
+
+    private static boolean joinsOnPress(int button) {
+        return KeyEvent.isGamepadButton(button)
+                || (button >= KeyEvent.KEYCODE_DPAD_UP && button <= KeyEvent.KEYCODE_DPAD_RIGHT);
+    }
+
     public boolean buttonEvent(int id, int button, boolean pressed)
     {
         if (!createDevice(id))
             return false;
+        if (pressed && joinsOnPress(button))
+            claimPort(id);
         return joystickButtonEvent(id, button, pressed);
     }
     public boolean axisEvent(int id, int button, int value)
@@ -251,6 +372,7 @@ public final class InputDeviceManager implements InputManager.InputDeviceListene
     public native void touchMouseEvent(int xpos, int ypos, int buttons);
     private native void joystickAdded(int id, String name, int maple_port, String uniqueId, int[] fullAxes, int[] halfAxes, boolean rumbleEnabled);
     private native void joystickRemoved(int id);
+    private native void joystickSetPort(int id, int port);
     public native boolean keyboardEvent(int key, boolean pressed);
     public native void keyboardText(int c);
     public static native boolean isMicPluggedIn();
