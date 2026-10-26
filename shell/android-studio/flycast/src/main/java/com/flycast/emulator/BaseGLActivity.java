@@ -13,6 +13,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
+import android.os.Process;
 import android.preference.PreferenceManager;
 import android.util.Log;
 import android.view.InputDevice;
@@ -54,6 +55,8 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
     protected Handler handler = new Handler();
     private boolean audioPermissionRequested = false;
     private boolean storagePermissionGranted = false;
+    private static boolean environmentInitialized = false;
+    private String launchedGameUri;
     private boolean paused = true;
     private boolean resumedCalled = false;
     private String pendingIntentUrl;
@@ -69,6 +72,14 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
             // See https://medium.com/@pablobaxter/what-happened-to-my-subclass-android-application-924c91bafcac
             handler.post(() -> System.exit(0));
             finish();
+            return;
+        }
+        // A game sent to a process whose emulator already ran (its activity since finished) would
+        // land in the old session: start over in a fresh process with the new game
+        Intent launchIntent = getIntent();
+        if (savedInstanceState == null && environmentInitialized
+                && Intent.ACTION_VIEW.equals(launchIntent.getAction()) && launchIntent.getData() != null) {
+            restartProcessWith(launchIntent);
             return;
         }
         // Set the navigation bar color to 0 to avoid left over when it fades out on Android 10
@@ -104,6 +115,7 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
             return;
         }
         Log.i("flycast", "Environment initialized");
+        environmentInitialized = true;
         Emulator app = (Emulator)getApplicationContext();
         app.getConfigurationPrefs();
         storage = new AndroidStorage(this);
@@ -151,6 +163,7 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
             getIntent().setData(null);
             setIntent(null);
             if (gameUri != null) {
+                launchedGameUri = gameUri.toString();
                 if (storagePermissionGranted)
                     JNIdc.setGameUri(gameUri.toString());
                 else
@@ -158,6 +171,22 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
             }
         }
         Log.i("flycast", "BaseGLActivity.onCreate done");
+    }
+
+    // singleTop, so frontends (which launch with NEW_TASK only) reach the running activity here.
+    // The emulator runs one game per process: another game restarts the process into it
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        Uri gameUri = Intent.ACTION_VIEW.equals(intent.getAction()) ? intent.getData() : null;
+        if (gameUri != null && !gameUri.toString().equals(launchedGameUri))
+            restartProcessWith(intent);
+    }
+
+    private void restartProcessWith(Intent intent) {
+        startActivity(new Intent(intent)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK));
+        Process.killProcess(Process.myPid());
     }
 
 	// Called from native code
