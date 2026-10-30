@@ -61,6 +61,8 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
     private boolean resumedCalled = false;
     private String pendingIntentUrl;
     private boolean hasKeyboard = false;
+    private boolean selectHeld = false;
+    private boolean startHeld = false;
     private AndroidStorage storage;
 
     @Override
@@ -369,8 +371,34 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
         return super.onGenericMotionEvent(event);
     }
 
+    // A pad's Home button, or Select+Start held together, leaves the game back to the frontend
+    // that launched it (ES-DE). Home quits on release so the release does not reach the frontend
+    private boolean handleExitButtons(int keyCode, KeyEvent event) {
+        if (!event.isFromSource(InputDevice.SOURCE_GAMEPAD) && !event.isFromSource(InputDevice.SOURCE_JOYSTICK))
+            return false;
+        boolean down = event.getAction() == KeyEvent.ACTION_DOWN;
+        if (keyCode == KeyEvent.KEYCODE_BUTTON_MODE) {
+            if (!down)
+                finishAffinity();
+            return true;
+        }
+        if (keyCode == KeyEvent.KEYCODE_BUTTON_SELECT)
+            selectHeld = down;
+        else if (keyCode == KeyEvent.KEYCODE_BUTTON_START)
+            startHeld = down;
+        else
+            return false;
+        if (down && selectHeld && startHeld) {
+            finishAffinity();
+            return true;
+        }
+        return false;
+    }
+
     @Override
     public boolean onKeyUp(int keyCode, KeyEvent event) {
+        if (handleExitButtons(keyCode, event))
+            return true;
         if (InputDeviceManager.getInstance().buttonEvent(event.getDeviceId(), keyCode, false))
             return true;
         if (hasKeyboard && InputDeviceManager.getInstance().keyboardEvent(keyCode, false))
@@ -390,6 +418,8 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (event.getRepeatCount() == 0) {
+            if (handleExitButtons(keyCode, event))
+                return true;
             if (keyCode == KeyEvent.KEYCODE_BACK) {
                 onBackKey();
                 return true;
